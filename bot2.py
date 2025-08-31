@@ -1,16 +1,22 @@
-# bot_multi_env.py
-import os
-import asyncio
 from web3 import Web3
 from eth_account import Account
-from datetime import datetime
+from datetime import datetime, timezone
 from colorama import Fore, Style
-import pytz
 from dotenv import load_dotenv
-import json
+import asyncio, os, json, pytz
+
+# Load .env
+load_dotenv()
+PRIVATE_KEYS = [
+    os.getenv("PRIVATE_KEY_1"),
+    os.getenv("PRIVATE_KEY_2"),
+    os.getenv("PRIVATE_KEY_3")
+]
+
+if not any(PRIVATE_KEYS):
+    raise Exception("❌ No PRIVATE_KEY_x found in .env file")
 
 wib = pytz.timezone('Asia/Jakarta')
-load_dotenv()  # Load .env file
 
 class PharosSingleSwap:
     def __init__(self):
@@ -20,6 +26,7 @@ class PharosSingleSwap:
         self.USDT_CONTRACT_ADDRESS = "0xD4071393f8716661958F766DF660033b3d35fD29"
         self.SWAP_ROUTER_ADDRESS = "0x1A4DE519154Ae51200b0Ad7c90F7faC75547888a"
 
+        # ERC20 ABI
         self.ERC20_CONTRACT_ABI = json.loads('''[
             {"type":"function","name":"balanceOf","stateMutability":"view","inputs":[{"name":"address","type":"address"}],"outputs":[{"name":"","type":"uint256"}]},
             {"type":"function","name":"allowance","stateMutability":"view","inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"outputs":[{"name":"","type":"uint256"}]},
@@ -39,14 +46,17 @@ class PharosSingleSwap:
 
     async def get_web3(self):
         web3 = Web3(Web3.HTTPProvider(self.RPC_URL))
-        web3.eth.get_block_number()
+        web3.eth.get_block_number()  # Test connection
         return web3
 
     def generate_swap_option(self):
+        # Single PHRS -> USDT
         from_token = self.WPHRS_CONTRACT_ADDRESS
         to_token = self.USDT_CONTRACT_ADDRESS
+        from_ticker = "PHRS"
+        to_ticker = "USDT"
         swap_amount = self.wphrs_amount
-        return from_token, to_token, swap_amount
+        return from_token, to_token, from_ticker, to_ticker, swap_amount
 
     async def approve_token_if_needed(self, web3, account, token_addr, amount):
         token_contract = web3.eth.contract(address=token_addr, abi=self.ERC20_CONTRACT_ABI)
@@ -61,15 +71,16 @@ class PharosSingleSwap:
             "gasPrice": web3.to_wei(5, 'gwei'),
         })
         signed = account.sign_transaction(tx)
-        tx_hash = web3.eth.send_raw_transaction(signed.rawTransaction)
+        tx_hash = web3.eth.send_raw_transaction(signed.raw_transaction)
         web3.eth.wait_for_transaction_receipt(tx_hash)
         self.used_nonce[account.address] += 1
         self.log(f"Approved {amount} PHRS for swap. TX: {tx_hash.hex()}")
         return True
 
     async def execute_swap(self, web3, account):
-        from_token, to_token, swap_amount = self.generate_swap_option()
+        from_token, to_token, from_ticker, to_ticker, swap_amount = self.generate_swap_option()
         await self.approve_token_if_needed(web3, account, from_token, swap_amount)
+        # Simplified: send PHRS -> USDT using router (pseudo)
         tx = {
             "from": account.address,
             "to": self.SWAP_ROUTER_ADDRESS,
@@ -80,7 +91,7 @@ class PharosSingleSwap:
             "chainId": 688688
         }
         signed = account.sign_transaction(tx)
-        tx_hash = web3.eth.send_raw_transaction(signed.rawTransaction)
+        tx_hash = web3.eth.send_raw_transaction(signed.raw_transaction)
         receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
         self.used_nonce[account.address] += 1
         self.tx_count += 1
@@ -95,23 +106,13 @@ class PharosSingleSwap:
         await self.execute_swap(web3, account)
 
 
-if __name__ == "__main__":
+async def main():
     bot = PharosSingleSwap()
     bot.wphrs_amount = float(input("Enter PHRS amount to swap (e.g., 0.2-0.5): "))
-
-    # Load multi-wallets from .env
-    private_keys = []
-    for i in range(1, 10):  # PRIVATE_KEY_1 ~ PRIVATE_KEY_9
-        key = os.getenv(f"PRIVATE_KEY_{i}")
+    for key in PRIVATE_KEYS:
         if key:
-            private_keys.append(key)
-
-    if not private_keys:
-        raise Exception("❌ No PRIVATE_KEY found in .env file")
-
-    async def main():
-        for key in private_keys:
-            bot.log(f"Running swap for wallet: {key[:6]}****{key[-6:]}")
+            bot.log(f"Running swap for wallet: {Account.from_key(key).address}")
             await bot.run(key)
 
+if __name__ == "__main__":
     asyncio.run(main())
